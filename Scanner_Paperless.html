@@ -58,18 +58,6 @@
         Arahkan kotak putih ke barcode IMEI. Tidak perlu foto.
       </div>
 
-      <div id="lensBox" style="display:none;margin-top:8px">
-        <div style="font-size:12px;text-align:center;color:#ddd;margin-bottom:4px">
-          PILIH LENSA
-        </div>
-        <div style="display:flex;gap:6px">
-          <button class="manual" style="margin-top:0" onclick="setZoom(1)">1×</button>
-          <button class="manual" style="margin-top:0" onclick="setZoom(2)">2×</button>
-          <button class="manual" style="margin-top:0" onclick="setZoom(3)">3×</button>
-          <button class="manual" style="margin-top:0" onclick="setZoom(4)">4×</button>
-        </div>
-      </div>
-
       <button class="retry" onclick="startScanner()">🔄 MULAI / ULANG SCAN</button>
       <button class="manual" onclick="toggleManual()">⌨️ Input Manual</button>
 
@@ -87,7 +75,6 @@
   let reader = null;
   let active = false;
   let sent = false;
-  let videoTrack = null;
 
   function setStatus(text){
     document.getElementById('status').textContent = text;
@@ -97,7 +84,6 @@
     active = false;
     try{ if(controls) controls.stop(); }catch(e){}
     controls = null;
-    videoTrack = null;
     try{ if(reader) reader.reset(); }catch(e){}
     reader = null;
   }
@@ -142,48 +128,11 @@
       );
 
       active = true;
-
-      // Ambil track dari video yang memang sudah berhasil dibuka.
-      try{
-        const video = document.getElementById('video');
-        videoTrack = video.srcObject && video.srcObject.getVideoTracks()[0];
-
-        if(videoTrack && videoTrack.getCapabilities){
-          const caps = videoTrack.getCapabilities();
-          if(caps.zoom && Number(caps.zoom.max) >= 2){
-            document.getElementById('lensBox').style.display = 'block';
-            // Default 2×: pada logical multi-camera Samsung ini biasanya
-            // memindahkan tampilan dari ultrawide ke area kamera utama.
-            await videoTrack.applyConstraints({advanced:[{zoom:2}]});
-            setStatus('SCANNING — 2× aktif. Arahkan barcode ke kotak putih.');
-          }
-        }
-      }catch(e){}
-
     }catch(e){
       active = false;
       setStatus(
         'Kamera gagal dibuka. Pastikan izin kamera aktif dan halaman ini dibuka langsung di browser.'
       );
-    }
-  }
-
-
-  async function setZoom(z){
-    try{
-      if(!videoTrack) return;
-      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
-      if(!caps.zoom){
-        setStatus('HP/browser tidak menyediakan kontrol zoom kamera.');
-        return;
-      }
-      const min = Number(caps.zoom.min ?? 1);
-      const max = Number(caps.zoom.max ?? z);
-      const value = Math.max(min, Math.min(Number(z), max));
-      await videoTrack.applyConstraints({advanced:[{zoom:value}]});
-      setStatus('SCANNING — lensa/zoom ' + value.toFixed(1) + '× aktif.');
-    }catch(e){
-      setStatus('Zoom kamera tidak dapat diubah.');
     }
   }
 

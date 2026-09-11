@@ -1,51 +1,52 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <base target="_top">
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Scan IMEI / SN</title>
-  <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
-  <style>
-    *{box-sizing:border-box}
-    body{margin:0;background:#111;color:#fff;font-family:Arial,sans-serif}
-    .top{background:#087bea;padding:15px;font-weight:700;font-size:18px}
-    .wrap{max-width:600px;margin:auto}
-    #video{width:100%;height:auto;max-height:65vh;object-fit:cover;background:#000}
-    .box{padding:14px}
-    .status{background:#222;border-radius:10px;padding:12px;margin-bottom:12px;font-size:14px}
-    .line{border:2px solid #fff;border-radius:8px;position:absolute;left:8%;right:8%;top:42%;height:16%}
-    .camera{position:relative;background:#000}
-    button{width:100%;padding:13px;border:0;border-radius:9px;font-weight:700;font-size:15px}
-    .blue{background:#087bea;color:#fff}
-    .gray{background:#333;color:#fff;margin-top:8px}
-    .manual{background:#fff;color:#111;margin-top:12px;padding:12px;border-radius:10px}
-    input{width:100%;padding:12px;border:1px solid #ccc;border-radius:8px;font-size:16px}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scan Barcode IMEI / SN</title>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#111;color:#fff;font-family:Arial,sans-serif}
+.top{background:#087bea;padding:15px;font-weight:700;font-size:18px}
+.wrap{max-width:600px;margin:auto}
+.camera{position:relative;background:#000;min-height:280px}
+#video{width:100%;height:auto;max-height:65vh;object-fit:cover;background:#000}
+.line{border:2px solid #fff;border-radius:8px;position:absolute;left:8%;right:8%;top:42%;height:16%;pointer-events:none}
+.box{padding:14px}
+.status{background:#222;border-radius:10px;padding:12px;margin-bottom:12px;font-size:14px}
+button,select,input{width:100%;padding:13px;border-radius:9px;font-size:15px}
+button{border:0;font-weight:700}
+.blue{background:#087bea;color:#fff}
+.gray{background:#333;color:#fff;margin-top:8px}
+select{display:none;margin-bottom:10px}
+.manual{background:#fff;color:#111;margin-top:12px;padding:12px;border-radius:10px}
+input{border:1px solid #ccc;margin-top:8px}
+</style>
 </head>
 <body>
 <div class="top">📷 Scan Barcode IMEI / SN</div>
 <div class="wrap">
-  <div class="status" id="status">Meminta akses kamera...</div>
-  <select id="cameraSelect" onchange="switchCamera(this.value)"
-    style="display:none;width:100%;padding:12px;border-radius:9px;margin-bottom:12px;font-size:14px">
-  </select>
-  <div class="status" id="result"></div>
+  <div class="status" id="status">Tekan MULAI SCAN untuk membuka kamera.</div>
+
+  <select id="cameraSelect" onchange="switchCamera(this.value)"></select>
+
   <div class="camera">
     <video id="video" autoplay muted playsinline></video>
     <div class="line"></div>
   </div>
+
   <div class="box">
-    <button class="blue" onclick="start()">🔄 MULAI SCAN</button>
+    <button class="blue" onclick="startScanner()">🔄 MULAI SCAN</button>
     <button class="gray" onclick="closePage()">Tutup</button>
 
-    <div id="manualBox" class="manual">
+    <div class="manual">
       <b>Jika barcode tidak terbaca</b>
       <div style="font-size:12px;margin:6px 0 8px;color:#555">
         Input manual tetap tersedia.
       </div>
       <input id="manual" placeholder="Masukkan IMEI / SN">
-      <button class="blue" style="margin-top:8px" onclick="send(document.getElementById('manual').value)">
+      <button class="blue" style="margin-top:8px" onclick="sendResult(document.getElementById('manual').value)">
         GUNAKAN HASIL
       </button>
     </div>
@@ -53,249 +54,142 @@
 </div>
 
 <script>
-  let controls = null;
-  let reader = null;
-  let active = false;
-  let sent = false;
-  let selectedDeviceId = null;
+let reader=null, controls=null, stream=null, selectedDeviceId=null, sent=false;
+const video=document.getElementById('video');
+const statusEl=document.getElementById('status');
+const selectEl=document.getElementById('cameraSelect');
 
-  const statusEl = document.getElementById('status');
-  const selectEl = document.getElementById('cameraSelect');
-  const videoEl = document.getElementById('video');
+function setStatus(x){statusEl.textContent=x}
 
-  function setStatus(text){
-    statusEl.textContent = text;
-  }
+function stopScanner(){
+  try{if(controls)controls.stop()}catch(e){}
+  controls=null;
+  try{if(reader)reader.reset()}catch(e){}
+  reader=null;
+  try{if(stream)stream.getTracks().forEach(t=>t.stop())}catch(e){}
+  stream=null;
+}
 
-  function stopScanner(){
-    active = false;
-    try{ if(controls) controls.stop(); }catch(e){}
-    controls = null;
-    try{ if(reader) reader.reset(); }catch(e){}
-    reader = null;
+function isFront(label){
+  return /front|user|face|selfie/i.test(label||'');
+}
 
-    if(videoEl.srcObject){
-      try{
-        videoEl.srcObject.getTracks().forEach(t => t.stop());
-      }catch(e){}
-      videoEl.srcObject = null;
-    }
-  }
+function isBadLens(label){
+  return /ultra|ultrawide|wide|0\.5|0,5|macro/i.test(label||'');
+}
 
-  function isLikelyFront(label){
-    return /front|user|face|selfie/i.test(label || '');
-  }
+async function openPermission(){
+  // IMPORTANT: this runs only from the user's button tap.
+  stream=await navigator.mediaDevices.getUserMedia({
+    video:{
+      facingMode:{exact:'environment'},
+      width:{ideal:1920},
+      height:{ideal:1080}
+    },
+    audio:false
+  });
+  video.srcObject=stream;
+  await video.play();
+}
 
-  function isLikelyUltra(label){
-    return /ultra|ultrawide|wide|0\.5|0,5|0\.6|0,6|macro|telephoto/i.test(label || '');
-  }
+async function listRearCameras(){
+  const devices=await navigator.mediaDevices.enumerateDevices();
+  return devices.filter(d=>d.kind==='videoinput' && !isFront(d.label));
+}
 
-  function cameraScore(item){
-    const label=(item.label||'').toLowerCase();
-    let score=0;
+function score(d){
+  const l=(d.label||'').toLowerCase();
+  let s=0;
+  if(/back|rear|environment|camera 0|camera 1/.test(l))s+=50;
+  if(/main|primary|standard|1x/.test(l))s+=100;
+  if(isBadLens(l))s-=200;
+  return s;
+}
 
-    if(!isLikelyFront(label)) score += 100;
-    if(/back|rear|environment|world/i.test(label)) score += 100;
-    if(/main|primary|standard|1x/i.test(label)) score += 80;
-    if(/ultra|ultrawide|wide|0\.5|0,5|macro/i.test(label)) score -= 250;
+async function startScanner(deviceId=null){
+  sent=false;
+  stopScanner();
 
-    // The biggest differentiator on Android/Samsung is often optical zoom range.
-    // A main camera normally exposes a larger zoom capability than ultrawide.
-    if(item.zoomMax) score += Math.min(item.zoomMax, 20) * 15;
-
-    return score;
-  }
-
-  async function getCameraCandidates(){
-    // First ask permission so Android/Chrome exposes useful camera labels.
-    let firstStream=null;
-    try{
-      firstStream=await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:'environment'},
-        audio:false
-      });
-    }catch(e){
-      throw e;
-    }finally{
-      if(firstStream){
-        firstStream.getTracks().forEach(t=>t.stop());
-      }
+  try{
+    setStatus('Meminta akses kamera...');
+    if(!deviceId){
+      await openPermission();
     }
 
-    const devices=await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
-    const videoDevices=devices.filter(d=>!isLikelyFront(d.label));
+    const cameras=await listRearCameras();
 
-    const candidates=[];
-
-    // Probe each rear camera and inspect capabilities.
-    for(const d of videoDevices){
-      let s=null;
-      let zoomMax=0;
-      try{
-        s=await navigator.mediaDevices.getUserMedia({
-          video:{deviceId:{exact:d.deviceId}},
-          audio:false
-        });
-        const track=s.getVideoTracks()[0];
-        const caps=track.getCapabilities ? track.getCapabilities() : {};
-        zoomMax=Number(caps.zoom && caps.zoom.max || 0);
-      }catch(e){
-        zoomMax=0;
-      }finally{
-        if(s) s.getTracks().forEach(t=>t.stop());
-      }
-
-      candidates.push({
-        deviceId:d.deviceId,
-        label:d.label || 'Kamera belakang',
-        zoomMax:zoomMax
-      });
-    }
-
-    return candidates.sort((a,b)=>cameraScore(b)-cameraScore(a));
-  }
-
-  async function startScanner(deviceId){
-    stopScanner();
-    sent=false;
-    document.getElementById('result').textContent='';
-    setStatus('Memilih kamera utama...');
-
-    try{
-      reader=new ZXingBrowser.BrowserMultiFormatReader();
-
-      const id=deviceId || selectedDeviceId;
-
-      if(id){
-        controls=await reader.decodeFromVideoDevice(
-          id,
-          'video',
-          function(result,error){
-            if(result && !sent){
-              const text=String(result.getText()||'').trim();
-              if(text) sendResult(text);
-            }
-          }
-        );
-      }else{
-        controls=await reader.decodeFromConstraints(
-          {
-            video:{
-              facingMode:{ideal:'environment'},
-              width:{ideal:1920},
-              height:{ideal:1080}
-            },
-            audio:false
-          },
-          'video',
-          function(result,error){
-            if(result && !sent){
-              const text=String(result.getText()||'').trim();
-              if(text) sendResult(text);
-            }
-          }
-        );
-      }
-
-      active=true;
-      setStatus('SCANNING — KAMERA UTAMA. Arahkan barcode IMEI ke kotak putih.');
-
-      // Try to force normal 1x zoom. If unsupported, camera stays at native default.
-      try{
-        const track=videoEl.srcObject && videoEl.srcObject.getVideoTracks()[0];
-        if(track){
-          const caps=track.getCapabilities ? track.getCapabilities() : {};
-          if(caps.zoom){
-            const min=Number(caps.zoom.min || 1);
-            const max=Number(caps.zoom.max || 1);
-            if(max >= 1){
-              const preferredZoom = max >= 2 ? 2 : Math.max(min,1); await track.applyConstraints({advanced:[{zoom:preferredZoom}]});
-            }
-          }
-        }
-      }catch(e){}
-
-    }catch(e){
-      active=false;
-      setStatus('Kamera gagal dibuka. Pilih kamera lain dari daftar.');
-    }
-  }
-
-  async function setupCameras(){
-    try{
-      const candidates=await getCameraCandidates();
-
-      if(!candidates.length){
-        throw new Error('Tidak ada kamera belakang');
-      }
-
+    if(cameras.length){
       selectEl.innerHTML='';
+      cameras.sort((a,b)=>score(b)-score(a));
 
-      candidates.forEach(function(c,i){
-        const opt=document.createElement('option');
-        opt.value=c.deviceId;
-
-        let name=c.label;
-        if(i===0) name='⭐ KAMERA UTAMA — '+name;
-        if(c.zoomMax) name += ' | zoom max '+c.zoomMax+'x';
-
-        opt.textContent=name;
-        selectEl.appendChild(opt);
+      cameras.forEach((c,i)=>{
+        const o=document.createElement('option');
+        o.value=c.deviceId;
+        o.textContent=(i===0?'⭐ ':'')+(c.label||('Kamera belakang '+(i+1)));
+        selectEl.appendChild(o);
       });
 
-      selectEl.style.display=candidates.length>1?'block':'none';
-
-      // Highest capability score is selected first.
-      selectedDeviceId=candidates[0].deviceId;
+      selectEl.style.display=cameras.length>1?'block':'none';
+      selectedDeviceId=deviceId || cameras[0].deviceId;
       selectEl.value=selectedDeviceId;
-
-      await startScanner(selectedDeviceId);
-
-    }catch(e){
-      // Fallback to environment camera.
-      await startScanner();
     }
-  }
 
-  async function switchCamera(id){
-    if(!id) return;
-    selectedDeviceId=id;
-    await startScanner(id);
-  }
+    reader=new ZXingBrowser.BrowserMultiFormatReader();
 
-  function sendResult(value){
-    value=String(value||'').trim();
-    if(!value || sent)return;
+    controls=await reader.decodeFromVideoDevice(
+      selectedDeviceId,
+      'video',
+      (result,error)=>{
+        if(result && !sent){
+          const v=String(result.getText()||'').trim();
+          if(v)sendResult(v);
+        }
+      }
+    );
 
-    sent=true;
-    stopScanner();
-
-    document.getElementById('result').textContent='✓ '+value;
-    setStatus('Barcode terbaca. Mengirim hasil...');
-
+    // If Android exposes logical multi-camera zoom, move away from 0.5x.
     try{
-      if(window.opener && !window.opener.closed){
-        window.opener.postMessage(
-          {type:'PAPERLESS_SCAN_RESULT',value:value},
-          '*'
-        );
-        setTimeout(()=>window.close(),500);
-        return;
+      const track=video.srcObject && video.srcObject.getVideoTracks()[0];
+      if(track && track.getCapabilities){
+        const c=track.getCapabilities();
+        if(c.zoom && Number(c.zoom.max)>=2){
+          await track.applyConstraints({advanced:[{zoom:2}]});
+        }
       }
     }catch(e){}
 
-    setStatus('Hasil terbaca: '+value);
+    setStatus('SCANNING — arahkan barcode IMEI ke kotak putih.');
+  }catch(e){
+    console.error(e);
+    setStatus('Kamera belum terbuka. Tekan MULAI SCAN lagi. Jika Chrome meminta izin, pilih Izinkan.');
   }
+}
 
-  function toggleManual(){
-    const box=document.getElementById('manualBox');
-    box.style.display=box.style.display==='block'?'none':'block';
-  }
+async function switchCamera(id){
+  if(id) await startScanner(id);
+}
 
-  window.addEventListener('beforeunload',stopScanner);
+function sendResult(value){
+  value=String(value||'').trim();
+  if(!value || sent)return;
+  sent=true;
+  stopScanner();
 
-  // Start after page load.
-  setupCameras();
+  setStatus('✓ Barcode terbaca: '+value);
+
+  try{
+    if(window.opener && !window.opener.closed){
+      window.opener.postMessage({type:'PAPERLESS_SCAN_RESULT',value:value},'*');
+      setTimeout(()=>window.close(),500);
+      return;
+    }
+  }catch(e){}
+}
+
+function closePage(){
+  stopScanner();
+  try{window.close()}catch(e){}
+}
 </script>
 </body>
 </html>

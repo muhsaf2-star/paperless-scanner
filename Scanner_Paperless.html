@@ -3,170 +3,170 @@
 <head>
   <base target="_top">
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Scan IMEI / SN</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>Live Scan IMEI / SN</title>
   <script src="https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/index.min.js"></script>
   <style>
     *{box-sizing:border-box}
-    body{margin:0;background:#111;color:#fff;font-family:Arial,sans-serif}
-    .top{background:#087bea;padding:15px;font-weight:700;font-size:18px}
-    .wrap{max-width:600px;margin:auto}
-    #video{width:100%;height:auto;max-height:65vh;object-fit:cover;background:#000}
-    .box{padding:14px}
-    .status{background:#222;border-radius:10px;padding:12px;margin-bottom:12px;font-size:14px}
-    .line{border:2px solid #fff;border-radius:8px;position:absolute;left:8%;right:8%;top:42%;height:16%}
-    .camera{position:relative;background:#000}
-    button{width:100%;padding:13px;border:0;border-radius:9px;font-weight:700;font-size:15px}
-    .blue{background:#087bea;color:#fff}
-    .gray{background:#333;color:#fff;margin-top:8px}
-    .manual{background:#fff;color:#111;margin-top:12px;padding:12px;border-radius:10px}
-    input{width:100%;padding:12px;border:1px solid #ccc;border-radius:8px;font-size:16px}
+    html,body{margin:0;width:100%;height:100%;background:#000;color:#fff;font-family:Arial,Helvetica,sans-serif}
+    body{overflow:hidden}
+    .top{height:58px;background:#087bea;display:flex;align-items:center;padding:0 15px;font-size:18px;font-weight:700}
+    .wrap{height:calc(100vh - 58px);position:relative;background:#000}
+    video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+    .shade{position:absolute;inset:0;pointer-events:none;background:linear-gradient(rgba(0,0,0,.35),transparent 25%,transparent 75%,rgba(0,0,0,.45))}
+    .guide{
+      position:absolute;left:7%;right:7%;top:39%;height:22%;
+      border:3px solid #fff;border-radius:12px;
+      box-shadow:0 0 0 9999px rgba(0,0,0,.12)
+    }
+    .guide:after{
+      content:"";position:absolute;left:0;right:0;top:50%;
+      height:2px;background:#087bea;box-shadow:0 0 8px #087bea
+    }
+    .status{
+      position:absolute;left:14px;right:14px;top:15px;
+      background:rgba(0,0,0,.72);border-radius:10px;padding:11px;
+      text-align:center;font-size:14px
+    }
+    .bottom{
+      position:absolute;left:14px;right:14px;bottom:14px;
+      background:rgba(0,0,0,.72);border-radius:12px;padding:12px
+    }
+    .result{font-size:18px;font-weight:700;word-break:break-all;text-align:center}
+    .hint{font-size:12px;text-align:center;margin-top:6px;color:#ddd}
+    button{width:100%;border:0;border-radius:9px;padding:12px;font-weight:700;font-size:14px;margin-top:9px}
+    .close{background:#fff;color:#111}
+    .retry{background:#087bea;color:#fff}
+    .manual{background:#222;border:1px solid #555;color:#fff}
+    input{width:100%;padding:11px;border-radius:8px;border:1px solid #666;background:#fff;color:#111;font-size:16px}
+    .manualBox{display:none;margin-top:8px}
   </style>
 </head>
 <body>
-<div class="top">📷 Scan Barcode IMEI / SN</div>
-<div class="wrap">
-  <div class="status" id="status">Meminta akses kamera...</div>
-  <div class="camera">
-    <video id="video" autoplay muted playsinline></video>
-    <div class="line"></div>
-  </div>
-  <div class="box">
-    <button class="blue" onclick="start()">🔄 MULAI SCAN</button>
-    <button class="gray" onclick="closePage()">Tutup</button>
+  <div class="top">📷 Live Scanner IMEI / SN</div>
 
-    <div class="manual">
-      <b>Jika barcode tidak terbaca</b>
-      <div style="font-size:12px;margin:6px 0 8px;color:#555">
-        Input manual tetap tersedia.
+  <div class="wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <div class="shade"></div>
+    <div class="guide"></div>
+
+    <div id="status" class="status">Membuka kamera...</div>
+
+    <div class="bottom">
+      <div id="result" class="result"></div>
+      <div id="hint" class="hint">
+        Arahkan kotak putih ke barcode IMEI. Tidak perlu foto.
       </div>
-      <input id="manual" placeholder="Masukkan IMEI / SN">
-      <button class="blue" style="margin-top:8px" onclick="send(document.getElementById('manual').value)">
-        GUNAKAN HASIL
-      </button>
+
+      <button class="retry" onclick="startScanner()">🔄 MULAI / ULANG SCAN</button>
+      <button class="manual" onclick="toggleManual()">⌨️ Input Manual</button>
+
+      <div id="manualBox" class="manualBox">
+        <input id="manual" inputmode="text" placeholder="IMEI / SN">
+        <button class="retry" onclick="sendResult(document.getElementById('manual').value)">GUNAKAN HASIL</button>
+      </div>
+
+      <button class="close" onclick="window.close()">Tutup Scanner</button>
     </div>
   </div>
-</div>
 
 <script>
-let controls=null, stream=null, reader=null, running=false;
-const statusEl=document.getElementById('status');
+  let controls = null;
+  let reader = null;
+  let active = false;
+  let sent = false;
 
-function status(t){statusEl.textContent=t}
+  function setStatus(text){
+    document.getElementById('status').textContent = text;
+  }
 
-async function start(){
-  if(running) return;
-  running=true;
-  status('Membuka kamera belakang...');
+  function stopScanner(){
+    active = false;
+    try{ if(controls) controls.stop(); }catch(e){}
+    controls = null;
+    try{ if(reader) reader.reset(); }catch(e){}
+    reader = null;
+  }
 
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},
-      audio:false
-    });
-    const video=document.getElementById('video');
-    video.srcObject=stream;
-    await video.play();
+  async function startScanner(){
+    if(active) stopScanner();
 
-    // Coba paksa kamera logical rear menjauh dari ultrawide.
-    // Hanya dilakukan bila browser/HP menyediakan kontrol zoom.
+    sent = false;
+    document.getElementById('result').textContent = '';
+    setStatus('Membuka kamera belakang...');
+
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      setStatus('Browser tidak mendukung kamera. Buka Web App langsung di Chrome/Safari.');
+      return;
+    }
+
     try{
-      const track=stream.getVideoTracks()[0];
-      const caps=track.getCapabilities ? track.getCapabilities() : {};
-      if(caps.zoom && Number(caps.zoom.max) >= 2){
-        await track.applyConstraints({advanced:[{zoom:2}]});
+      // Use ZXing's device-specific live scanner.
+      reader = new ZXingBrowser.BrowserMultiFormatReader();
+      const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+
+      if(!devices.length){
+        throw new Error('Tidak ada kamera');
+      }
+
+      // Prefer a back/rear/environment camera.
+      let device = devices.find(function(d){
+        return /back|rear|environment|world/i.test(d.label || '');
+      }) || devices[devices.length - 1];
+
+      setStatus('SCANNING — arahkan barcode ke kotak putih.');
+
+      controls = await reader.decodeFromVideoDevice(
+        device.deviceId,
+        'video',
+        function(result, error){
+          if(result && !sent){
+            const text = String(result.getText() || '').trim();
+            if(text) sendResult(text);
+          }
+        }
+      );
+
+      active = true;
+    }catch(e){
+      active = false;
+      setStatus(
+        'Kamera gagal dibuka. Pastikan izin kamera aktif dan halaman ini dibuka langsung di browser.'
+      );
+    }
+  }
+
+  function sendResult(value){
+    value = String(value || '').trim();
+    if(!value || sent) return;
+
+    sent = true;
+    stopScanner();
+
+    document.getElementById('result').textContent = '✓ ' + value;
+    setStatus('Barcode terbaca. Mengirim hasil...');
+
+    try{
+      if(window.opener && !window.opener.closed){
+        window.opener.postMessage(
+          {type:'PAPERLESS_SCAN_RESULT',value:value},
+          window.location.origin
+        );
+        setTimeout(function(){ window.close(); },500);
+        return;
       }
     }catch(e){}
 
-    // ZXing reader: live continuous scan, cocok untuk Code 128/1D + QR.
-    reader=new ZXingBrowser.BrowserMultiFormatReader();
-    const devices=await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
-
-    let deviceId=null;
-    if(devices.length){
-      const back=devices.find(d=>/back|rear|environment/i.test(d.label));
-      deviceId=(back||devices[devices.length-1]).deviceId;
-    }
-
-    if(deviceId){
-      try{
-        if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
-        controls=await reader.decodeFromVideoDevice(deviceId,'video',(result,err)=>{
-          if(result){
-            const text=result.getText();
-            if(text) send(text);
-          }
-        });
-        status('SCANNING — arahkan garis putih ke barcode IMEI/SN.');
-      }catch(e){
-        // fallback manual video stream + browser BarcodeDetector if available
-        await fallbackDetector();
-      }
-    }else{
-      await fallbackDetector();
-    }
-  }catch(e){
-    running=false;
-    status('Kamera gagal dibuka. Pastikan halaman ini dibuka di tab Chrome langsung dan izin kamera diizinkan.');
+    setStatus('Hasil terbaca: ' + value);
   }
-}
 
-async function fallbackDetector(){
-  if(!('BarcodeDetector' in window)){
-    status('Kamera aktif, tetapi scanner barcode tidak tersedia di browser ini. Gunakan input manual.');
-    return;
+  function toggleManual(){
+    const box=document.getElementById('manualBox');
+    box.style.display=box.style.display==='block'?'none':'block';
   }
-  try{
-    const detector=new BarcodeDetector({
-      formats:['code_128','code_39','code_93','codabar','ean_13','ean_8','upc_a','upc_e','itf','qr_code']
-    });
-    const video=document.getElementById('video');
-    status('SCANNING — arahkan garis putih ke barcode.');
-    async function loop(){
-      if(!running)return;
-      try{
-        const codes=await detector.detect(video);
-        if(codes && codes.length && codes[0].rawValue){
-          send(codes[0].rawValue);
-          return;
-        }
-      }catch(e){}
-      requestAnimationFrame(loop);
-    }
-    loop();
-  }catch(e){
-    status('Kamera aktif. Scanner barcode tidak kompatibel; gunakan input manual.');
-  }
-}
 
-function send(value){
-  value=String(value||'').trim();
-  if(!value)return;
-  stop();
-  try{
-    if(window.opener && !window.opener.closed){
-      window.opener.postMessage({type:'PAPERLESS_SCAN_RESULT',value:value},'*');
-      status('✓ Terbaca: '+value+' — mengembalikan hasil...');
-      setTimeout(()=>window.close(),500);
-      return;
-    }
-  }catch(e){}
-  status('✓ Hasil: '+value+' — salin ke kolom transaksi.');
-}
-
-function stop(){
-  running=false;
-  try{if(controls)controls.stop()}catch(e){}
-  controls=null;
-  try{if(reader)reader.reset()}catch(e){}
-  reader=null;
-  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
-}
-
-function closePage(){stop();window.close();}
-
-window.addEventListener('beforeunload',stop);
-start();
+  window.addEventListener('beforeunload', stopScanner);
+  startScanner();
 </script>
 </body>
 </html>

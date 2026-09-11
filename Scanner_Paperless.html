@@ -58,6 +58,18 @@
         Arahkan kotak putih ke barcode IMEI. Tidak perlu foto.
       </div>
 
+      <div id="lensBox" style="display:none;margin-top:8px">
+        <div style="font-size:12px;text-align:center;color:#ddd;margin-bottom:4px">
+          PILIH LENSA
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="manual" style="margin-top:0" onclick="setZoom(1)">1×</button>
+          <button class="manual" style="margin-top:0" onclick="setZoom(2)">2×</button>
+          <button class="manual" style="margin-top:0" onclick="setZoom(3)">3×</button>
+          <button class="manual" style="margin-top:0" onclick="setZoom(4)">4×</button>
+        </div>
+      </div>
+
       <button class="retry" onclick="startScanner()">🔄 MULAI / ULANG SCAN</button>
       <button class="manual" onclick="toggleManual()">⌨️ Input Manual</button>
 
@@ -75,6 +87,7 @@
   let reader = null;
   let active = false;
   let sent = false;
+  let videoTrack = null;
 
   function setStatus(text){
     document.getElementById('status').textContent = text;
@@ -84,6 +97,7 @@
     active = false;
     try{ if(controls) controls.stop(); }catch(e){}
     controls = null;
+    videoTrack = null;
     try{ if(reader) reader.reset(); }catch(e){}
     reader = null;
   }
@@ -101,63 +115,75 @@
     }
 
     try{
-      // Live scanner. Pakai constraint kamera belakang + resolusi tinggi.
+      // Use ZXing's device-specific live scanner.
       reader = new ZXingBrowser.BrowserMultiFormatReader();
+      const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
 
-      const constraints = {
-        video:{
-          facingMode:{ideal:'environment'},
-          width:{ideal:1920},
-          height:{ideal:1080}
-        },
-        audio:false
-      };
+      if(!devices.length){
+        throw new Error('Tidak ada kamera');
+      }
 
-      setStatus('SCANNING — menyiapkan fokus kamera...');
+      // Prefer a back/rear/environment camera.
+      let device = devices.find(function(d){
+        return /back|rear|environment|world/i.test(d.label || '');
+      }) || devices[devices.length - 1];
 
-      controls = await reader.decodeFromConstraints(
-        constraints,
+      setStatus('SCANNING — arahkan barcode ke kotak putih.');
+
+      controls = await reader.decodeFromVideoDevice(
+        device.deviceId,
         'video',
         function(result, error){
           if(result && !sent){
-            const value = String(result.getText() || '').trim();
-            if(value) sendResult(value);
+            const text = String(result.getText() || '').trim();
+            if(text) sendResult(text);
           }
         }
       );
 
       active = true;
 
-      // Optimalkan kamera HP untuk barcode dekat:
-      // continuous autofocus + zoom 2x jika tersedia.
+      // Ambil track dari video yang memang sudah berhasil dibuka.
       try{
         const video = document.getElementById('video');
-        const track = video.srcObject && video.srcObject.getVideoTracks()[0];
+        videoTrack = video.srcObject && video.srcObject.getVideoTracks()[0];
 
-        if(track && track.getCapabilities){
-          const caps = track.getCapabilities();
-          const advanced = [];
-
-          if(Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')){
-            advanced.push({focusMode:'continuous'});
-          }
-
+        if(videoTrack && videoTrack.getCapabilities){
+          const caps = videoTrack.getCapabilities();
           if(caps.zoom && Number(caps.zoom.max) >= 2){
-            advanced.push({zoom:2});
-          }
-
-          if(advanced.length){
-            await track.applyConstraints({advanced:advanced});
+            document.getElementById('lensBox').style.display = 'block';
+            // Default 2×: pada logical multi-camera Samsung ini biasanya
+            // memindahkan tampilan dari ultrawide ke area kamera utama.
+            await videoTrack.applyConstraints({advanced:[{zoom:2}]});
+            setStatus('SCANNING — 2× aktif. Arahkan barcode ke kotak putih.');
           }
         }
       }catch(e){}
 
-      setStatus('SCANNING — fokus otomatis aktif. Arahkan barcode ke kotak putih.');
     }catch(e){
       active = false;
       setStatus(
         'Kamera gagal dibuka. Pastikan izin kamera aktif dan halaman ini dibuka langsung di browser.'
       );
+    }
+  }
+
+
+  async function setZoom(z){
+    try{
+      if(!videoTrack) return;
+      const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+      if(!caps.zoom){
+        setStatus('HP/browser tidak menyediakan kontrol zoom kamera.');
+        return;
+      }
+      const min = Number(caps.zoom.min ?? 1);
+      const max = Number(caps.zoom.max ?? z);
+      const value = Math.max(min, Math.min(Number(z), max));
+      await videoTrack.applyConstraints({advanced:[{zoom:value}]});
+      setStatus('SCANNING — lensa/zoom ' + value.toFixed(1) + '× aktif.');
+    }catch(e){
+      setStatus('Zoom kamera tidak dapat diubah.');
     }
   }
 

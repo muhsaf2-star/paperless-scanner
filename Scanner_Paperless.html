@@ -53,10 +53,14 @@
   let reader = null;
   let active = false;
   let sent = false;
-  let currentStream = null;
+  let selectedDeviceId = null;
+
+  const statusEl = document.getElementById('status');
+  const selectEl = document.getElementById('cameraSelect');
+  const videoEl = document.getElementById('video');
 
   function setStatus(text){
-    document.getElementById('status').textContent = text;
+    statusEl.textContent = text;
   }
 
   function stopScanner(){
@@ -65,171 +69,199 @@
     controls = null;
     try{ if(reader) reader.reset(); }catch(e){}
     reader = null;
-    if(currentStream){
-      try{ currentStream.getTracks().forEach(t=>t.stop()); }catch(e){}
-      currentStream = null;
+
+    if(videoEl.srcObject){
+      try{
+        videoEl.srcObject.getTracks().forEach(t => t.stop());
+      }catch(e){}
+      videoEl.srcObject = null;
     }
   }
 
-  async function startScanner(){
-    stopScanner();
-    sent = false;
-    document.getElementById('result').textContent = '';
-    setStatus('Membuka KAMERA UTAMA belakang...');
+  function isLikelyFront(label){
+    return /front|user|face|selfie/i.test(label || '');
+  }
 
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      setStatus('Browser tidak mendukung kamera. Buka halaman ini langsung di Chrome.');
-      return;
+  function isLikelyUltra(label){
+    return /ultra|ultrawide|wide|0\.5|0,5|0\.6|0,6|macro|telephoto/i.test(label || '');
+  }
+
+  function cameraScore(item){
+    const label=(item.label||'').toLowerCase();
+    let score=0;
+
+    if(!isLikelyFront(label)) score += 100;
+    if(/back|rear|environment|world/i.test(label)) score += 100;
+    if(/main|primary|standard|1x/i.test(label)) score += 80;
+    if(/ultra|ultrawide|wide|0\.5|0,5|macro/i.test(label)) score -= 250;
+
+    // The biggest differentiator on Android/Samsung is often optical zoom range.
+    // A main camera normally exposes a larger zoom capability than ultrawide.
+    if(item.zoomMax) score += Math.min(item.zoomMax, 20) * 15;
+
+    return score;
+  }
+
+  async function getCameraCandidates(){
+    // First ask permission so Android/Chrome exposes useful camera labels.
+    let firstStream=null;
+    try{
+      firstStream=await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:'environment'},
+        audio:false
+      });
+    }catch(e){
+      throw e;
+    }finally{
+      if(firstStream){
+        firstStream.getTracks().forEach(t=>t.stop());
+      }
     }
 
-    try{
-      // IMPORTANT:
-      // Do NOT select the last camera device. On many Android phones that is
-      // the 0.5x / ultrawide camera. facingMode=environment asks the browser
-      // for its normal rear-facing camera.
-      reader = new ZXingBrowser.BrowserMultiFormatReader();
+    const devices=await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
+    const videoDevices=devices.filter(d=>!isLikelyFront(d.label));
 
-      const constraints = {
-        video:{
-          facingMode:{exact:'environment'},
-          width:{ideal:1920},
-          height:{ideal:1080},
-          frameRate:{ideal:30}
-        },
-        audio:false
-      };
+    const candidates=[];
 
-      controls = await reader.decodeFromConstraints(
-        constraints,
-        'video',
-        function(result, error){
-          if(result && !sent){
-            const text = String(result.getText() || '').trim();
-            if(text) sendResult(text);
-          }
-        }
-      );
-
-      active = true;
-      setStatus('SCANNING — kamera utama aktif. Dekatkan barcode IMEI ke kotak putih.');
-
-      // After permission, list cameras so user can switch if the phone still
-      // chooses an unwanted lens.
-      await populateCameraList();
-
-    }catch(e){
-      // Fallback: use browser's environment camera without exact constraint.
+    // Probe each rear camera and inspect capabilities.
+    for(const d of videoDevices){
+      let s=null;
+      let zoomMax=0;
       try{
-        reader = new ZXingBrowser.BrowserMultiFormatReader();
+        s=await navigator.mediaDevices.getUserMedia({
+          video:{deviceId:{exact:d.deviceId}},
+          audio:false
+        });
+        const track=s.getVideoTracks()[0];
+        const caps=track.getCapabilities ? track.getCapabilities() : {};
+        zoomMax=Number(caps.zoom && caps.zoom.max || 0);
+      }catch(e){
+        zoomMax=0;
+      }finally{
+        if(s) s.getTracks().forEach(t=>t.stop());
+      }
 
-        controls = await reader.decodeFromConstraints(
+      candidates.push({
+        deviceId:d.deviceId,
+        label:d.label || 'Kamera belakang',
+        zoomMax:zoomMax
+      });
+    }
+
+    return candidates.sort((a,b)=>cameraScore(b)-cameraScore(a));
+  }
+
+  async function startScanner(deviceId){
+    stopScanner();
+    sent=false;
+    document.getElementById('result').textContent='';
+    setStatus('Memilih kamera utama...');
+
+    try{
+      reader=new ZXingBrowser.BrowserMultiFormatReader();
+
+      const id=deviceId || selectedDeviceId;
+
+      if(id){
+        controls=await reader.decodeFromVideoDevice(
+          id,
+          'video',
+          function(result,error){
+            if(result && !sent){
+              const text=String(result.getText()||'').trim();
+              if(text) sendResult(text);
+            }
+          }
+        );
+      }else{
+        controls=await reader.decodeFromConstraints(
           {
             video:{
-              facingMode:'environment',
+              facingMode:{ideal:'environment'},
               width:{ideal:1920},
               height:{ideal:1080}
             },
             audio:false
           },
           'video',
-          function(result, error){
+          function(result,error){
             if(result && !sent){
-              const text = String(result.getText() || '').trim();
+              const text=String(result.getText()||'').trim();
               if(text) sendResult(text);
             }
           }
         );
-
-        active = true;
-        setStatus('SCANNING — kamera belakang aktif.');
-        await populateCameraList();
-      }catch(err){
-        active = false;
-        setStatus('Kamera gagal dibuka. Pastikan izin kamera aktif.');
       }
-    }
-  }
-
-  async function populateCameraList(){
-    const select = document.getElementById('cameraSelect');
-    if(!select) return;
-
-    try{
-      const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
-      if(!devices || devices.length < 2){
-        select.style.display = 'none';
-        return;
-      }
-
-      select.innerHTML = '';
-
-      // Put likely main camera first. Explicitly push ultrawide/wide/0.5x
-      // to the bottom so it isn't accidentally selected.
-      const ranked = devices.map(function(d){
-        const label=(d.label||'').toLowerCase();
-        let score=0;
-
-        if(/back|rear|environment|world/.test(label)) score += 50;
-        if(/main|primary/.test(label)) score += 40;
-        if(/camera 0|camera0/.test(label)) score += 15;
-
-        if(/ultra|ultrawide|wide|0\.5|0,5/.test(label)) score -= 100;
-        if(/front|user|face/.test(label)) score -= 200;
-
-        return {d:d,score:score};
-      }).sort((a,b)=>b.score-a.score);
-
-      ranked.forEach(function(item, i){
-        const opt=document.createElement('option');
-        opt.value=item.d.deviceId;
-
-        const label=item.d.label || ('Kamera '+(i+1));
-        const isWide=/ultra|ultrawide|wide|0\.5|0,5/i.test(label);
-        opt.textContent = isWide ? label+' (hindari untuk barcode)' : label;
-
-        select.appendChild(opt);
-      });
-
-      // Show only if multiple cameras are available.
-      select.style.display='block';
-      select.value=ranked[0].d.deviceId;
-
-    }catch(e){
-      select.style.display='none';
-    }
-  }
-
-  async function switchCamera(deviceId){
-    if(!deviceId || sent) return;
-
-    stopScanner();
-    sent=false;
-    setStatus('Mengganti kamera...');
-
-    try{
-      reader = new ZXingBrowser.BrowserMultiFormatReader();
-
-      controls = await reader.decodeFromVideoDevice(
-        deviceId,
-        'video',
-        function(result, error){
-          if(result && !sent){
-            const text=String(result.getText()||'').trim();
-            if(text) sendResult(text);
-          }
-        }
-      );
 
       active=true;
-      setStatus('SCANNING — kamera dipilih. Arahkan ke barcode IMEI.');
+      setStatus('SCANNING — KAMERA UTAMA. Arahkan barcode IMEI ke kotak putih.');
+
+      // Try to force normal 1x zoom. If unsupported, camera stays at native default.
+      try{
+        const track=videoEl.srcObject && videoEl.srcObject.getVideoTracks()[0];
+        if(track){
+          const caps=track.getCapabilities ? track.getCapabilities() : {};
+          if(caps.zoom){
+            const min=Number(caps.zoom.min || 1);
+            const max=Number(caps.zoom.max || 1);
+            if(max >= 1){
+              await track.applyConstraints({advanced:[{zoom:Math.max(min,1)}]});
+            }
+          }
+        }
+      }catch(e){}
+
     }catch(e){
-      setStatus('Kamera tidak dapat digunakan. Pilih kamera lain.');
+      active=false;
+      setStatus('Kamera gagal dibuka. Pilih kamera lain dari daftar.');
     }
+  }
+
+  async function setupCameras(){
+    try{
+      const candidates=await getCameraCandidates();
+
+      if(!candidates.length){
+        throw new Error('Tidak ada kamera belakang');
+      }
+
+      selectEl.innerHTML='';
+
+      candidates.forEach(function(c,i){
+        const opt=document.createElement('option');
+        opt.value=c.deviceId;
+
+        let name=c.label;
+        if(i===0) name='⭐ KAMERA UTAMA — '+name;
+        if(c.zoomMax) name += ' | zoom max '+c.zoomMax+'x';
+
+        opt.textContent=name;
+        selectEl.appendChild(opt);
+      });
+
+      selectEl.style.display=candidates.length>1?'block':'none';
+
+      // Highest capability score is selected first.
+      selectedDeviceId=candidates[0].deviceId;
+      selectEl.value=selectedDeviceId;
+
+      await startScanner(selectedDeviceId);
+
+    }catch(e){
+      // Fallback to environment camera.
+      await startScanner();
+    }
+  }
+
+  async function switchCamera(id){
+    if(!id) return;
+    selectedDeviceId=id;
+    await startScanner(id);
   }
 
   function sendResult(value){
     value=String(value||'').trim();
-    if(!value || sent) return;
+    if(!value || sent)return;
 
     sent=true;
     stopScanner();
@@ -243,7 +275,7 @@
           {type:'PAPERLESS_SCAN_RESULT',value:value},
           '*'
         );
-        setTimeout(function(){ window.close(); },500);
+        setTimeout(()=>window.close(),500);
         return;
       }
     }catch(e){}
@@ -256,8 +288,10 @@
     box.style.display=box.style.display==='block'?'none':'block';
   }
 
-  window.addEventListener('beforeunload', stopScanner);
-  startScanner();
+  window.addEventListener('beforeunload',stopScanner);
+
+  // Start after page load.
+  setupCameras();
 </script>
 </body>
 </html>

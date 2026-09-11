@@ -101,66 +101,58 @@
     }
 
     try{
-      // Use ZXing's device-specific live scanner.
+      // Live scanner. Pakai constraint kamera belakang + resolusi tinggi.
       reader = new ZXingBrowser.BrowserMultiFormatReader();
-      const devices = await ZXingBrowser.BrowserCodeReader.listVideoInputDevices();
 
-      if(!devices.length){
-        throw new Error('Tidak ada kamera');
-      }
+      const constraints = {
+        video:{
+          facingMode:{ideal:'environment'},
+          width:{ideal:1920},
+          height:{ideal:1080}
+        },
+        audio:false
+      };
 
-      // Pilih kamera belakang dan hindari nama yang biasanya berarti ultrawide.
-      function lensScore(d){
-        const l=(d.label||'').toLowerCase();
-        let s=0;
-        if(/back|rear|environment|world|facing back/.test(l)) s+=100;
-        if(/main|primary|standard|1x/.test(l)) s+=120;
-        if(/ultra|ultrawide|wide|0\.5|0,5|macro|telephoto/.test(l)) s-=250;
-        return s;
-      }
+      setStatus('SCANNING — menyiapkan fokus kamera...');
 
-      let rearDevices = devices.filter(function(d){
-        return !/front|user|face|selfie/i.test(d.label || '');
-      });
-
-      let pool = rearDevices.length ? rearDevices : devices.slice();
-      pool.sort(function(a,b){ return lensScore(b)-lensScore(a); });
-      let device = pool[0];
-
-      setStatus('Membuka kamera: ' + (device.label || 'kamera belakang') + '...');
-
-      controls = await reader.decodeFromVideoDevice(
-        device.deviceId,
+      controls = await reader.decodeFromConstraints(
+        constraints,
         'video',
         function(result, error){
           if(result && !sent){
-            const text = String(result.getText() || '').trim();
-            if(text) sendResult(text);
+            const value = String(result.getText() || '').trim();
+            if(value) sendResult(value);
           }
         }
       );
 
       active = true;
 
-      // Jika HP mengekspos logical camera + zoom, pakai 2x
-      // agar tampilan tidak jatuh ke ultrawide 0.5x.
+      // Optimalkan kamera HP untuk barcode dekat:
+      // continuous autofocus + zoom 2x jika tersedia.
       try{
         const video = document.getElementById('video');
         const track = video.srcObject && video.srcObject.getVideoTracks()[0];
+
         if(track && track.getCapabilities){
           const caps = track.getCapabilities();
+          const advanced = [];
+
+          if(Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')){
+            advanced.push({focusMode:'continuous'});
+          }
+
           if(caps.zoom && Number(caps.zoom.max) >= 2){
-            await track.applyConstraints({
-              advanced:[{zoom:2}]
-            });
-            setStatus('SCANNING — kamera utama/zoom 2x aktif. Arahkan barcode ke kotak putih.');
-          }else{
-            setStatus('SCANNING — arahkan barcode ke kotak putih.');
+            advanced.push({zoom:2});
+          }
+
+          if(advanced.length){
+            await track.applyConstraints({advanced:advanced});
           }
         }
-      }catch(e){
-        setStatus('SCANNING — arahkan barcode ke kotak putih.');
-      }
+      }catch(e){}
+
+      setStatus('SCANNING — fokus otomatis aktif. Arahkan barcode ke kotak putih.');
     }catch(e){
       active = false;
       setStatus(

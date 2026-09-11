@@ -27,6 +27,10 @@
 <div class="top">📷 Scan Barcode IMEI / SN</div>
 <div class="wrap">
   <div class="status" id="status">Meminta akses kamera...</div>
+  <select id="cameraSelect" onchange="switchCamera(this.value)"
+    style="display:none;width:100%;padding:12px;border-radius:9px;margin-bottom:12px;font-size:14px">
+  </select>
+  <div class="status" id="result"></div>
   <div class="camera">
     <video id="video" autoplay muted playsinline></video>
     <div class="line"></div>
@@ -35,7 +39,7 @@
     <button class="blue" onclick="start()">🔄 MULAI SCAN</button>
     <button class="gray" onclick="closePage()">Tutup</button>
 
-    <div class="manual">
+    <div id="manualBox" class="manual">
       <b>Jika barcode tidak terbaca</b>
       <div style="font-size:12px;margin:6px 0 8px;color:#555">
         Input manual tetap tersedia.
@@ -205,7 +209,7 @@
             const min=Number(caps.zoom.min || 1);
             const max=Number(caps.zoom.max || 1);
             if(max >= 1){
-              await track.applyConstraints({advanced:[{zoom:Math.max(min,1)}]});
+              const preferredZoom = max >= 2 ? 2 : Math.max(min,1); await track.applyConstraints({advanced:[{zoom:preferredZoom}]});
             }
           }
         }
